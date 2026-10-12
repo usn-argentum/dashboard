@@ -33,13 +33,17 @@ TUNNEL=$!
 
 echo "Waiting for tunnel..."
 for _ in $(seq 30); do
-    URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOG" | head -1)
+    # api.trycloudflare.com also shows up in the log (incl. error lines); it is not the tunnel
+    URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$LOG" | grep -v '//api\.' | head -1)
     [ -n "$URL" ] && break
+    kill -0 $TUNNEL 2>/dev/null || break
     sleep 1
 done
 
 if [ -z "$URL" ]; then
-    echo "Tunnel did not come up. cloudflared output:"; cat "$LOG"; exit 1
+    echo "Tunnel did not come up. cloudflared output:"; cat "$LOG"
+    grep -q 'no such host' "$LOG" && echo "DNS lookup failed: the phone hotspot blocks trycloudflare.com, see README."
+    exit 1
 fi
 
 echo
