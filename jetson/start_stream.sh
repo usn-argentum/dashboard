@@ -23,8 +23,9 @@ fi
 LOG=$(mktemp)
 trap 'kill $BRIDGE $TUNNEL 2>/dev/null; rm -f "$LOG"; exit' INT TERM EXIT
 
+# Inner single quotes keep launch from parsing the globs as YAML lists (rosbridge wants a string)
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml \
-    port:=$PORT topics_glob:="$TOPICS" services_glob:="[/none]" params_glob:="[/none]" \
+    port:=$PORT topics_glob:="'$TOPICS'" services_glob:="'[/none]'" params_glob:="'[/none]'" \
     > /tmp/rosbridge.log 2>&1 &
 BRIDGE=$!
 
