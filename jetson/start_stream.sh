@@ -21,7 +21,8 @@ if [ ! -x "$CLOUDFLARED" ]; then
 fi
 
 LOG=$(mktemp)
-trap 'kill $BRIDGE $TUNNEL 2>/dev/null; rm -f "$LOG"; exit' INT TERM EXIT
+# SIGINT lets ros2 launch shut down its nodes; SIGTERM leaves rosbridge orphaned holding the port
+trap 'kill -INT $BRIDGE 2>/dev/null; kill $TUNNEL 2>/dev/null; wait $BRIDGE 2>/dev/null; rm -f "$LOG"; exit' INT TERM EXIT
 
 # Inner single quotes keep launch from parsing the globs as YAML lists (rosbridge wants a string)
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml \
