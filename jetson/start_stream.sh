@@ -51,5 +51,7 @@ echo
 echo "Tunnel:    $URL"
 echo "Dashboard: ${PAGE}?url=${URL}"
 echo
+# The URL changes on every start; keep the current one findable when running as a service
+echo "${PAGE}?url=${URL}" > "$HOME/stream_url.txt"
 echo "Streaming. Ctrl+C to stop. (rosbridge log: /tmp/rosbridge.log)"
 wait $TUNNEL
