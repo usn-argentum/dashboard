@@ -1,0 +1,17 @@
+[Unit]
+Description=Dashboard stream: rosbridge + Cloudflare quick tunnel
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=argentum
+# Wait for real NTP sync (no time limit): ROS needs a sane clock and the tunnel needs TLS
+ExecStartPre=/bin/sh -c 'until [ -e /run/systemd/timesync/synchronized ]; do sleep 2; done'
+TimeoutStartSec=infinity
+ExecStart=/home/argentum/start_stream.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
