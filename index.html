@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argentum Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/roslib@1.4.1/build/roslib.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #181c22; --border: #2a3038; --text: #e6e9ee;
+    --muted: #8b94a3; --accent: #4ea1ff; --ok: #3ecf8e; --bad: #ff5d5d; --scan: #ffb547;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  h1 { font-size: 18px; margin: 0 auto 0 0; }
+  #url { flex: 1 1 320px; min-width: 0; }
+  input, button, select {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;
+  }
+  button { cursor: pointer; background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  #dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  #dot.ok { background: var(--ok); } #dot.bad { background: var(--bad); }
+  main {
+    display: grid; gap: 16px; padding: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  section h2 {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 14px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--border);
+  }
+  .meta { color: var(--muted); font-weight: normal; font-variant-numeric: tabular-nums; }
+  .view { position: relative; aspect-ratio: 16 / 10; background: #000; display: grid; place-items: center; }
+  #cam { width: 100%; height: 100%; object-fit: contain; display: none; }
+  #scan { width: 100%; height: 100%; display: block; }
+  .placeholder { position: absolute; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Argentum Rover</h1>
+  <input id="url" placeholder="Paste tunnel URL, e.g. https://xxxx.trycloudflare.com" autocomplete="off">
+  <button id="connect">Connect</button>
+  <span id="status"><span id="dot"></span><span id="statusText">Disconnected</span></span>
+</header>
+
+<main>
+  <section>
+    <h2>Camera <span class="meta" id="camFps">–</span></h2>
+    <div class="view">
+      <img id="cam" alt="Rover camera">
+      <span class="placeholder" id="camWait">No image yet</span>
+    </div>
+  </section>
+  <section>
+    <h2>
+      <span>Lidar scan <span class="meta" id="scanFps">–</span></span>
+      <select id="range" aria-label="Lidar range">
+        <option value="2">2 m</option><option value="4" selected>4 m</option><option value="8">8 m</option>
+      </select>
+    </h2>
+    <div class="view"><canvas id="scan"></canvas></div>
+  </section>
+</main>
+
+<script>
+const CAMERA_TOPIC = '/camera/camera/color/image_raw/compressed';
+const SCAN_TOPIC = '/lidar_scan';
+const THROTTLE_MS = 100; // max 10 msgs/s per topic, keeps mobile data use down
+
+const $ = id => document.getElementById(id);
+let ros = null, lastScan = null;
+
+// Accept https://, wss:// or a bare hostname; rosbridge needs wss:// from an https page.
+function toWsUrl(raw) {
+  let u = raw.trim().replace(/\/+$/, '');
+  if (!u) return '';
+  if (/^https:\/\//i.test(u)) return u.replace(/^https/i, 'wss');
+  if (/^http:\/\//i.test(u)) return u.replace(/^http/i, 'ws');
+  if (/^wss?:\/\//i.test(u)) return u;
+  return 'wss://' + u;
+}
+
+function setStatus(text, cls) {
+  $('statusText').textContent = text;
+  $('dot').className = cls || '';
+}
+
+// Counts messages per second for the header labels.
+function rateCounter(el) {
+  let n = 0;
+  setInterval(() => { el.textContent = ros ? n + ' Hz' : '–'; n = 0; }, 1000);
+  return () => n++;
+}
+const camTick = rateCounter($('camFps'));
+const scanTick = rateCounter($('scanFps'));
+
+function connect() {
+  const url = toWsUrl($('url').value);
+  if (!url) return;
+  if (ros) ros.close();
+  try { localStorage.setItem('rosbridgeUrl', $('url').value.trim()); } catch (e) {}
+
+  setStatus('Connecting…');
+  ros = new ROSLIB.Ros({ url });
+  ros.on('connection', () => { setStatus('Connected', 'ok'); subscribe(); });
+  ros.on('error', () => setStatus('Connection error', 'bad'));
+  ros.on('close', () => setStatus('Disconnected', 'bad'));
+}
+
+function subscribe() {
+  new ROSLIB.Topic({
+    ros, name: CAMERA_TOPIC, messageType: 'sensor_msgs/msg/CompressedImage',
+    throttle_rate: THROTTLE_MS, queue_length: 1
+  }).subscribe(msg => {
+    // rosbridge sends uint8[] as base64, so the JPEG can go straight into a data URL
+    $('cam').src = 'data:image/jpeg;base64,' + msg.data;
+    $('cam').style.display = 'block';
+    $('camWait').style.display = 'none';
+    camTick();
+  });
+
+  new ROSLIB.Topic({
+    ros, name: SCAN_TOPIC, messageType: 'sensor_msgs/msg/LaserScan',
+    throttle_rate: THROTTLE_MS, queue_length: 1
+  }).subscribe(msg => { lastScan = msg; drawScan(); scanTick(); });
+}
+
+function drawScan() {
+  const c = $('scan'), ctx = c.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const range = +$('range').value;
+  const cx = w / 2, cy = h / 2, scale = Math.min(w, h) / 2 / range;
+
+  // 1 m range rings
+  ctx.strokeStyle = '#2a3038'; ctx.fillStyle = '#8b94a3'; ctx.font = '11px system-ui';
+  for (let r = 1; r <= range; r++) {
+    ctx.beginPath(); ctx.arc(cx, cy, r * scale, 0, 2 * Math.PI); ctx.stroke();
+    ctx.fillText(r + ' m', cx + 3, cy - r * scale - 3);
+  }
+
+  // Rover marker, forward (+x) is up
+  ctx.fillStyle = '#4ea1ff';
+  ctx.beginPath(); ctx.moveTo(cx, cy - 9); ctx.lineTo(cx - 6, cy + 6); ctx.lineTo(cx + 6, cy + 6); ctx.fill();
+
+  if (!lastScan) return;
+  ctx.fillStyle = '#ffb547';
+  const { ranges, angle_min, angle_increment, range_min, range_max } = lastScan;
+  for (let i = 0; i < ranges.length; i++) {
+    const r = ranges[i];
+    if (r === null || !isFinite(r) || r < range_min || r > range_max) continue;
+    const a = angle_min + i * angle_increment;
+    ctx.fillRect(cx - r * Math.sin(a) * scale - 1.5, cy - r * Math.cos(a) * scale - 1.5, 3, 3);
+  }
+}
+
+$('connect').onclick = connect;
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+$('range').onchange = drawScan;
+window.addEventListener('resize', drawScan);
+
+// Pre-fill from ?url=... (printed by the Jetson script) or the last used URL
+const fromQuery = new URLSearchParams(location.search).get('url');
+let saved = null;
+try { saved = localStorage.getItem('rosbridgeUrl'); } catch (e) {}
+$('url').value = fromQuery || saved || '';
+drawScan();
+if (fromQuery) connect();
+</script>
+</body>
+</html>
